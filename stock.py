@@ -1,198 +1,172 @@
-import pandas as pd
 import yfinance as yf
+import tkinter as tk
+from tkinter import ttk, messagebox
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
+from matplotlib.dates import AutoDateLocator, DateFormatter
+import pandas as pd
+import pytz  # Add this import for timezone handling
 
-# ===============================
-# 1. LOAD NSE STOCK LIST
-# ===============================
+def fetch_stock_data():
+    tickers = entry_tickers.get().upper().split(',')
+    tickers = [ticker.strip() for ticker in tickers]
 
-try:
-    # Read the CSV
-    df = pd.read_csv("EQUITY_L.csv")
-    
-    # Strip any hidden spaces from column headers (Fixes the KeyError: 'SYMBOL')
-    df.columns = df.columns.str.strip()
-    
-    # Extract symbols
-    stocks = df['SYMBOL'].tolist()
-    
-    # Convert to Yahoo Finance format
-    stocks = [str(stock).strip() + ".NS" for stock in stocks]
-    print(f"✅ Successfully loaded {len(stocks)} stocks from EQUITY_L.csv")
-    
-except FileNotFoundError:
-    print("⚠️ 'EQUITY_L.csv' not found. Using a default sample list of NSE stocks.")
-    stocks = [
-        "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", 
-        "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "L&T.NS", "BAJFINANCE.NS"
-    ]
-except KeyError:
-    print("\n❌ ERROR: Could not find the 'SYMBOL' column in the CSV.")
-    print(f"Columns found in your CSV: {df.columns.tolist()}")
-    print("Please ensure your CSV has a column exactly named 'SYMBOL'.")
-    exit()
-
-print("Sample:", stocks[:10])
-
-
-# ===============================
-# 2. ANALYZE SINGLE STOCK
-# ===============================
-
-def analyze_stock(stock_name):
-    print(f"\nAnalyzing {stock_name}...\n")
-
-    # Download data (progress=False prevents terminal spam)
-    data = yf.download(stock_name, period="6mo", progress=False)
-
-    if data.empty:
-        print("❌ No data found. Please check the ticker symbol.")
+    if not tickers:
+        messagebox.showerror("Input Error", "Please enter at least one stock ticker symbol.")
         return
 
-    # Handle multi-index columns from newer yfinance versions
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.droplevel(1)
-
-    # Calculate Moving Averages
-    data['MA20'] = data['Close'].rolling(20).mean()
-    data['MA50'] = data['Close'].rolling(50).mean()
-
-    # Drop NaN values created by moving averages
-    data.dropna(inplace=True)
-    
-    if data.empty:
-        print("❌ Not enough data points to calculate Moving Averages.")
-        return
-
-    # Get the latest row of data
-    latest = data.iloc[-1]
-
-    # Safely extract values
-    close_price = float(latest['Close'])
-    ma20 = float(latest['MA20'])
-    ma50 = float(latest['MA50'])
-    volume = int(latest['Volume'])
-
-    # Signal Logic
-    if close_price > ma20 and ma20 > ma50:
-        signal = "BUY 📈"
-    elif close_price < ma20 and ma20 < ma50:
-        signal = "SELL 📉"
-    else:
-        signal = "HOLD ⚖️"
-
-    # Print details to console
-    print(f"Price:  ₹{close_price:.2f}")
-    print(f"MA20:   ₹{ma20:.2f}")
-    print(f"MA50:   ₹{ma50:.2f}")
-    print(f"Volume: {volume:,}")
-    print(f"Signal: {signal}")
-
-    # Plot (This opens the graphical window on your desktop)
-    plt.figure(figsize=(10, 5))
-    plt.plot(data.index, data['Close'], label="Close Price", color='blue', linewidth=1.5)
-    plt.plot(data.index, data['MA20'], label="20-Day MA", color='orange', linestyle='--')
-    plt.plot(data.index, data['MA50'], label="50-Day MA", color='red', linestyle='--')
-    
-    plt.title(f"{stock_name} - 6 Month Trend")
-    plt.xlabel("Date")
-    plt.ylabel("Price (INR)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Show the chart window
-    plt.show()
-
-
-# ===============================
-# 3. SCAN MULTIPLE STOCKS
-# ===============================
-
-def scan_market(limit=50):
-    print(f"\nScanning top {limit} stocks in the market...\n")
-
-    results = []
-    failed_stocks = 0
-
-    for stock in stocks[:limit]:
-        try:
-            # Using Ticker().history() bypasses the yfinance Multi-Index bug
-            ticker_obj = yf.Ticker(stock)
-            data = ticker_obj.history(period="3mo")
-
-            if data.empty:
-                failed_stocks += 1
-                continue
-
-            # Calculate Moving Averages
-            data['MA20'] = data['Close'].rolling(20).mean()
-            data['MA50'] = data['Close'].rolling(50).mean()
+    try:
+        clear_previous_data()
+        
+        all_info = {}
+        for ticker_symbol in tickers:
+            stock = yf.Ticker(ticker_symbol)
+            info = stock.info
             
-            # Clean data
-            data.dropna(inplace=True)
-            if data.empty:
+            if not info:
+                messagebox.showerror("Data Error", f"No information available for {ticker_symbol}")
                 continue
 
-            # Get latest values
-            latest = data.iloc[-1]
-            close_price = float(latest['Close'])
-            ma20 = float(latest['MA20'])
-            ma50 = float(latest['MA50'])
+            all_info[ticker_symbol] = info
+            # Plot stock data
+            plot_stock_data(stock, ticker_symbol)
+        
+        # Display stock information
+        display_comparison_info(all_info)
+    except Exception as e:
+        messagebox.showerror("Error", f"Error retrieving data: {e}")
 
-            # Signal Logic
-            if close_price > ma20 and ma20 > ma50:
-                results.append((stock, "BUY 📈", close_price))
-            elif close_price < ma20 and ma20 < ma50:
-                results.append((stock, "SELL 📉", close_price))
+def clear_previous_data():
+    # Clear previous stock information
+    text_info.config(state=tk.NORMAL)
+    text_info.delete(1.0, tk.END)
+    text_info.config(state=tk.DISABLED)
+    
+    # Clear previous plot
+    for widget in frame_plot.winfo_children():
+        widget.destroy()
 
-        except Exception as e:
-            # Print the error so it doesn't fail silently
-            print(f"⚠️ Error scanning {stock}: {e}")
-            failed_stocks += 1
-            continue
+def display_comparison_info(all_info):
+    text_info.config(state=tk.NORMAL)
+    text_info.delete(1.0, tk.END)
+    
+    header = f"{'Stock':<15} {'Current Price':<15} {'P/E Ratio':<15} {'52W High':<15} {'52W Low':<15} {'Dividend Yield':<20} {'Market Cap':<20}\n"
+    text_info.insert(tk.END, header)
+    text_info.insert(tk.END, '-'*105 + '\n')
+    
+    for ticker_symbol, info in all_info.items():
+        company_name = info.get('longName', 'N/A')
+        current_price = f"₹{info.get('currentPrice', 'N/A')}"
+        pe_ratio = info.get('trailingPE', 'N/A')
+        week_52_high = f"₹{info.get('fiftyTwoWeekHigh', 'N/A')}"
+        week_52_low = f"₹{info.get('fiftyTwoWeekLow', 'N/A')}"
+        dividend_yield = f"{info.get('dividendYield', 'N/A')*100 if info.get('dividendYield') else 'N/A'}%"
+        market_cap = f"₹{info.get('marketCap', 'N/A'):,}"
+        line = f"{company_name:<15} {current_price:<15} {pe_ratio:<15} {week_52_high:<15} {week_52_low:<15} {dividend_yield:<20} {market_cap:<20}\n"
+        text_info.insert(tk.END, line)
+    
+    text_info.config(state=tk.DISABLED)
 
-    # Print Final Results
-    print("\n🔥 TOP SIGNALS 🔥")
-    if failed_stocks > 0:
-        print(f"(Note: {failed_stocks} stocks were skipped due to missing data or network errors)\n")
+def plot_stock_data(stock, ticker_symbol):
+    data = stock.history(period='1d', interval='1m')
+    if data.empty:
+        messagebox.showerror("Data Error", f"No historical data available for {ticker_symbol}")
+        return
 
-    if not results:
-        print("No strong trends detected in this batch. The market might be moving sideways.")
-    else:
-        print(f"{'SYMBOL':<15} | {'SIGNAL':<10} | {'PRICE'}")
-        print("-" * 40)
-        for r in results[:15]:  # Show top 15 results to keep the terminal clean
-            print(f"{r[0]:<15} | {r[1]:<10} | ₹{r[2]:.2f}")
+    # Convert timestamps to Indian Standard Time (IST)
+    ist = pytz.timezone('Asia/Kolkata')
+    data.index = data.index.tz_convert(ist)
 
+    figure = plt.Figure(figsize=(12, 6), dpi=100)
+    ax = figure.add_subplot(111)
 
-# ===============================
-# 4. MAIN MENU
-# ===============================
+    # Define custom colors
+    plot_color = '#1f77b4'  # Blue
+    grid_color = '#e0e0e0'  # Light Gray
+    label_color = '#333333'  # Dark Gray
+    title_color = '#ff5722'  # Orange
 
-if __name__ == "__main__":
-    while True:
-        print("\n" + "="*30)
-        print("   NSE STOCK ANALYZER   ")
-        print("="*30)
-        print("1. Analyze Single Stock (w/ Chart)")
-        print("2. Scan Market (Find Top Signals)")
-        print("3. Exit")
+    ax.plot(data.index, data['Close'], label=f'{ticker_symbol} Close Price', color=plot_color, linestyle='-', linewidth=2)
 
-        choice = input("\nEnter your choice (1/2/3): ").strip()
+    # Customize the plot
+    ax.set_xlabel('Time', fontsize=12, color=label_color)
+    ax.set_ylabel('Price (INR)', fontsize=12, color=label_color)
+    ax.set_title(f'Historical Close Prices for {ticker_symbol}', fontsize=14, color=title_color)
+    ax.legend(loc='upper left', fontsize=10)
+    ax.grid(True, which='both', linestyle='--', linewidth=0.5, color=grid_color)
+    ax.tick_params(axis='both', colors=label_color)
 
-        if choice == "1":
-            stock = input("Enter stock symbol (e.g., RELIANCE): ").strip().upper()
-            if not stock.endswith(".NS"):
-                stock += ".NS"  # Auto-append .NS for Yahoo Finance
-            analyze_stock(stock)
+    # Update the time scale
+    locator = AutoDateLocator()
+    formatter = DateFormatter('%Y-%m-%d %H:%M', tz=ist)
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(formatter)
 
-        elif choice == "2":
-            # Change limit depending on how fast your PC/Internet is (e.g., 50, 100, 500)
-            scan_market(limit=50) 
+    # Rotate the date labels for better readability
+    figure.autofmt_xdate()
 
-        elif choice == "3":
-            print("\nExiting Analyzer. Goodbye!")
-            break
+    # Add plot to the tkinter frame
+    canvas = FigureCanvasTkAgg(figure, frame_plot)
+    canvas.draw()
+    canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
+def save_to_csv():
+    tickers = entry_tickers.get().upper().split(',')
+    tickers = [ticker.strip() for ticker in tickers]
+
+    if not tickers:
+        messagebox.showerror("Input Error", "Please enter at least one stock ticker symbol.")
+        return
+    
+    try:
+        all_data = []
+        for ticker_symbol in tickers:
+            stock = yf.Ticker(ticker_symbol)
+            data = stock.history(period='1d', interval='1m')
+            if not data.empty:
+                data['Ticker'] = ticker_symbol
+                all_data.append(data)
+        
+        if all_data:
+            combined_data = pd.concat(all_data)
+            combined_data.to_csv('stock_data.csv')
+            messagebox.showinfo("Success", "Data saved to 'stock_data.csv'")
         else:
-            print("\n❌ Invalid choice, please select 1, 2, or 3.")
+            messagebox.showwarning("No Data", "No data available to save.")
+    except Exception as e:
+        messagebox.showerror("Error", f"Error saving data: {e}")
+
+# Create the main window
+root = tk.Tk()
+root.title("Indian Stock Market Viewer")
+
+# Apply a theme color to the main window
+root.configure(bg='lightgrey')
+
+# Create and place the widgets
+frame_top = tk.Frame(root, bg='lightblue')
+frame_top.pack(side=tk.TOP, fill=tk.X, pady=5)
+
+label_tickers = tk.Label(frame_top, text="Enter Stock Ticker Symbols (comma-separated):", bg='lightblue', font=('Helvetica', 12))
+label_tickers.pack(side=tk.LEFT, padx=10)
+
+entry_tickers = tk.Entry(frame_top, width=50, font=('Helvetica', 12))
+entry_tickers.pack(side=tk.LEFT, padx=10)
+
+button_fetch = tk.Button(frame_top, text="Fetch Data", command=fetch_stock_data, bg='lightgreen', font=('Helvetica', 12))
+button_fetch.pack(side=tk.LEFT, padx=10)
+
+button_save = tk.Button(frame_top, text="Save Data", command=save_to_csv, bg='lightcoral', font=('Helvetica', 12))
+button_save.pack(side=tk.LEFT, padx=10)
+
+frame_info = tk.Frame(root)
+frame_info.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+text_info = tk.Text(frame_info, height=15, state=tk.DISABLED, bg='white', font=('Helvetica', 12))
+text_info.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+frame_plot = tk.Frame(root)
+frame_plot.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+# Start the main event loop
+root.mainloop()
